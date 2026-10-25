@@ -20,6 +20,10 @@ button{cursor:pointer;background:var(--ac2)}button.p{background:var(--ac);color:
 table{width:100%;border-collapse:collapse}td,th{padding:5px 6px;border-bottom:1px solid var(--bd);text-align:left;font-size:14px}
 .msg{background:var(--ac2);border:1px solid var(--ac);border-radius:8px;padding:8px 12px;margin:8px 0}
 svg text{fill:var(--mu);font-size:11px}
+button{touch-action:manipulation}.big{min-height:46px;padding:8px 14px}
+.tile{position:relative;min-height:104px;border-radius:14px;text-align:left;font-size:17px;display:flex;flex-direction:column;gap:4px;user-select:none;-webkit-user-select:none}.tile:active{transform:scale(.97)}
+.tile.on{border-color:var(--ac);background:var(--ac2)}.badge{position:absolute;top:8px;right:8px;background:var(--ac);color:#fff;border-radius:99px;min-width:28px;text-align:center;font-weight:700;padding:2px 8px}
+.cart{position:sticky;bottom:8px;box-shadow:0 -4px 18px rgba(0,0,0,.2)}.go{width:100%;font-size:18px;min-height:56px}
 </style></head><body><div id="app"></div>
 <script>
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -31,10 +35,10 @@ const enc=async(k,o)=>{const iv=crypto.getRandomValues(new Uint8Array(12));retur
 const dec=async(k,e)=>JSON.parse(D.decode(await sub.decrypt({name:'AES-GCM',iv:ub(e.iv)},k,ub(e.ct))));
 const wrap=async(wk,jwk)=>b64(await sub.encrypt({name:'RSA-OAEP'},await sub.importKey('jwk',jwk,RSA,false,['encrypt']),await sub.exportKey('raw',wk)));
 const unwrap=async(w)=>sub.importKey('raw',await sub.decrypt({name:'RSA-OAEP'},S.priv,ub(w)),'AES-GCM',true,['encrypt','decrypt']);
-const today=()=>new Date().toISOString().slice(0,10),uid=()=>crypto.randomUUID().slice(0,8);
+const today=()=>{const d=new Date();return new Date(d-d.getTimezoneOffset()*6e4).toISOString().slice(0,10)},uid=()=>crypto.randomUUID().slice(0,8);
 const money=n=>new Intl.NumberFormat(undefined,{style:'currency',currency:'USD'}).format(n||0);
 let cfg={repo:'',branch:'main',token:''};try{cfg={...cfg,...JSON.parse(localStorage.getItem('st_cfg')||'{}')}}catch(e){}
-const S={user:null,priv:null,pub:null,wss:[],cur:0,open:null,q:'',lab:'',sort:'name',msg:'',busy:0};
+const S={user:null,priv:null,pub:null,wss:[],cur:0,open:null,st:0,cart:{},recent:[],ev:'',pay:'',slab:'',q:'',lab:'',sort:'name',msg:'',busy:0};
 
 /* ---- GitHub contents API ---- */
 const NETERR=e=>new Error('Could not reach GitHub ('+e.message+'). Open this file directly in your browser (download it, then double-click it, or host it on GitHub Pages) — previews inside chat apps block network access.');
@@ -79,8 +83,8 @@ const A={
    const kp=await sub.generateKey({name:'RSA-OAEP',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},true,['encrypt','decrypt']);
    const pub=await sub.exportKey('jwk',kp.publicKey),priv=await enc(await pw(pass,salt),await sub.exportKey('jwk',kp.privateKey));
    await putFile(`store/users/${u}.json`,JSON.stringify({salt:b64(salt),pub,priv}),null,'new user');S.priv=kp.privateKey;S.pub=pub;S.user=u;await mkWs('My products')}})},
- out(){S.user=S.priv=null;S.wss=[];S.open=null;render()},
- ws(i){S.cur=+i;S.open=null;render()},
+ out(){S.user=S.priv=null;S.wss=[];S.open=null;S.st=0;S.cart={};S.recent=[];render()},
+ ws(i){S.cur=+i;S.open=null;S.cart={};S.recent=[];render()},
  newWs(){const n=prompt('Name for the new shared/private collection?');if(n)go(()=>mkWs(n))},
  share(){const u=(prompt('Username to share “'+W().data.name+'” with (they must have an account):')||'').trim().toLowerCase();if(!u)return;
   go(async()=>{const f=await getFile(`store/users/${u}.json`);if(!f)throw new Error('No account named '+u);const ws=W();ws.members[u]=await wrap(ws.key,JSON.parse(f.text).pub);await persist(ws);S.msg=u+' can now see and edit this collection.'})},
@@ -98,6 +102,21 @@ const A={
  rmPrice(d){const p=P(S.open);p.priceHistory=p.priceHistory.filter(h=>h.d!==d);go(save)},
  note(){const t=$('#nt').value.trim();if(!t)return;P(S.open).notes.push({id:uid(),d:$('#nd').value||today(),t});go(save)},
  rmNote(id){const p=P(S.open);p.notes=p.notes.filter(n=>n.id!==id);go(save)},
+ stOn(){S.st=1;S.cart={};S.slab='';try{S.ev=localStorage.getItem('st_ev')||S.ev}catch(e){}render();scrollTo(0,0)},
+ stOff(){S.st=0;render()},
+ ev(v){S.ev=v;try{localStorage.setItem('st_ev',v)}catch(e){}},
+ slab(l){S.slab=l;render()},
+ pay(m){S.pay=S.pay===m?'':m;render()},
+ tap(id){const c=S.cart;(c[id]=c[id]||{q:0,p:st(P(id)).cur}).q++;navigator.vibrate&&navigator.vibrate(15);render()},
+ qty(id,d){const x=S.cart[id];x.q+=d;if(x.q<1)delete S.cart[id];render()},
+ cp(id){const v=prompt('Price each',S.cart[id].p);if(v!==null&&v.trim()!==''&&+v>=0){S.cart[id].p=+v;render()}},
+ clr(){S.cart={};render()},
+ log(){const ids=Object.keys(S.cart).filter(i=>P(i));if(!ids.length)return;const n=[S.ev.trim(),S.pay].filter(Boolean).join(' · '),d=today(),made=[];let t=0;
+  go(async()=>{ids.forEach(i=>{const x=S.cart[i],sl={id:uid(),d,q:x.q,p:x.p,n};P(i).sales.push(sl);made.push([i,sl.id]);t+=x.q*x.p});
+   try{await save()}catch(e){made.forEach(([i,sid])=>{const p=P(i);if(p)p.sales=p.sales.filter(x=>x.id!==sid)});throw e}
+   S.recent.unshift({made,t});S.recent.length=Math.min(S.recent.length,5);S.cart={};S.pay='';S.msg='✓ Logged '+money(t)})},
+ undo(){const r=S.recent[0];if(!r)return;go(async()=>{const bak=[];r.made.forEach(([i,sid])=>{const p=P(i),x=p&&p.sales.find(y=>y.id===sid);if(x){bak.push([p,x]);p.sales=p.sales.filter(y=>y.id!==sid)}});
+   try{await save()}catch(e){bak.forEach(([p,x])=>p.sales.push(x));throw e}S.recent.shift();S.msg='Undid '+money(r.t)})},
  csv(){const rows=[['Product','Labels','Date','Qty','Unit price','Total','Note']];W().data.products.forEach(p=>p.sales.forEach(s=>rows.push([p.name,p.labels.join('|'),s.d,s.q,s.p,s.q*s.p,s.n])));
   const t=rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');dl(t,'sales.csv','text/csv')},
  json(){dl(JSON.stringify(W().data,null,2),'backup.json','application/json')}
@@ -116,12 +135,25 @@ function authV(){return`<h1>Sales Tracker</h1><p class="mu">Your data is encrypt
 <div class="row" style="margin-top:10px"><button class="p" ${S.busy?'disabled':''} onclick="A.auth('in')">Sign in</button><button ${S.busy?'disabled':''} onclick="A.auth('up')">Create account</button>${S.busy?'<span class="mu">Working…</span>':''}</div>
 <p class="mu">Lose your passphrase and your data cannot be recovered — there is no reset.</p></div>
 <details class="card"><summary>Setup help</summary><ol class="mu"><li>Create a <b>private</b> repo (e.g. sales-data).</li><li>GitHub → Settings → Developer settings → Fine-grained tokens: select only that repo, permission <i>Contents: Read and write</i>.</li><li>To let others use the app, add them as collaborators and have each make their own token for the same repo.</li><li>Each person creates an account here; use ⤴ Share to give someone access to a collection.</li></ol></details>`}
-function mainV(){const w=W(),pr=w.data.products;
- const head=`<div class="row"><h1>${esc(w.data.name)}</h1><button class="l" onclick="A.rename()">✎</button><span class="sp"></span><span class="mu">${esc(S.user)}</span><button onclick="A.out()">Sign out</button></div>
+function mainV(){const w=W(),pr=w.data.products;if(S.st)return saleV(w);
+ const head=`<div class="row"><h1>${esc(w.data.name)}</h1><button class="l" onclick="A.rename()">✎</button><button class="p" onclick="A.stOn()">🛒 Sale Time</button><span class="sp"></span><span class="mu">${esc(S.user)}</span><button onclick="A.out()">Sign out</button></div>
  ${S.msg?`<div class="msg">${esc(S.msg)}</div>`:''}${S.busy?'<div class="mu">Saving…</div>':''}
  <div class="row"><select onchange="A.ws(this.value)">${S.wss.map((x,i)=>`<option value="${i}" ${i==S.cur?'selected':''}>${esc(x.data.name)}${x.owner!==S.user?' (from '+esc(x.owner)+')':''}</option>`).join('')}</select>
  <button onclick="A.newWs()">+ Collection</button><button onclick="A.share()">⤴ Share</button><span class="mu">Members: ${Object.keys(w.members).map(esc).join(', ')}</span></div>`;
  return head+(S.open&&P(S.open)?detailV(P(S.open)):listV(w,pr))}
+function saleV(w){const pr=w.data.products,labs=[...new Set(pr.flatMap(p=>p.labels))].sort(),c=S.cart,ids=Object.keys(c).filter(i=>P(i)),t=today();
+ const tot=ids.reduce((a,i)=>a+c[i].q*c[i].p,0),n=ids.reduce((a,i)=>a+c[i].q,0),ts=pr.flatMap(p=>p.sales).filter(x=>x.d===t),dr=ts.reduce((a,x)=>a+x.q*x.p,0),du=ts.reduce((a,x)=>a+x.q,0);
+ const v=pr.filter(p=>!S.slab||p.labels.includes(S.slab)).sort((a,b)=>st(b).u-st(a).u||a.name.localeCompare(b.name));
+ return`<div class="row"><button onclick="A.stOff()">← Exit</button><b>🛒 Sale Time</b><input class="sp" placeholder="Event name (optional)" value="${esc(S.ev)}" oninput="A.ev(this.value)">
+ ${S.wss.length>1?`<select onchange="A.ws(this.value)">${S.wss.map((x,i)=>`<option value="${i}" ${i==S.cur?'selected':''}>${esc(x.data.name)}</option>`).join('')}</select>`:''}</div>
+ <div class="st" style="margin:8px 0"><div><span class="mu">Today’s sales</span><b>${du} items</b></div><div><span class="mu">Today’s total</span><b>${money(dr)}</b></div></div>
+ ${S.msg?`<div class="msg">${esc(S.msg)}</div>`:''}
+ <div class="row" style="margin:8px 0"><button class="big ${!S.slab?'p':''}" onclick="A.slab('')">All</button>${labs.map(l=>`<button class="big ${S.slab===l?'p':''}" data-l="${esc(l)}" onclick="A.slab(this.dataset.l)">${esc(l)}</button>`).join('')}
+ ${S.recent.length?`<span class="sp"></span><button class="big d" ${S.busy?'disabled':''} onclick="A.undo()">↩ Undo last (${money(S.recent[0].t)})</button>`:''}</div>
+ <div class="grid">${v.map(p=>{const x=c[p.id],cur=st(p).cur;return`<button class="tile ${x?'on':''}" onclick="A.tap('${p.id}')"><b>${esc(p.name)}</b><span class="mu">${cur?money(cur):'no price set'}</span>${x?`<span class="badge">${x.q}</span>`:''}</button>`}).join('')||'<p class="mu">No products yet — add some first.</p>'}</div>
+ ${ids.length?`<div class="cart card">${ids.map(i=>{const x=c[i];return`<div class="row"><span class="sp">${esc(P(i).name)}</span><button class="big" onclick="A.qty('${i}',-1)">−</button><b style="min-width:24px;text-align:center">${x.q}</b><button class="big" onclick="A.qty('${i}',1)">+</button><button class="big" onclick="A.cp('${i}')">${money(x.p)} ✎</button></div>`}).join('')}
+ <div class="row" style="margin:8px 0"><span class="mu">Paid by</span>${['Cash','Card','Other'].map(m=>`<button class="big ${S.pay===m?'p':''}" onclick="A.pay('${m}')">${m}</button>`).join('')}<span class="sp"></span><button class="big" onclick="A.clr()">Clear</button></div>
+ <button class="p big go" ${S.busy?'disabled':''} onclick="A.log()">Log sale · ${n} item${n>1?'s':''} · ${money(tot)}</button></div>`:''}`}
 function listV(w,pr){const all=[...new Set(pr.flatMap(p=>p.labels))].sort(),tot=pr.map(st);
  const rev=tot.reduce((a,t)=>a+t.rev,0),prof=tot.reduce((a,t)=>a+t.profit,0),un=tot.reduce((a,t)=>a+t.u,0);
  const byL=all.map(l=>[l,pr.filter(p=>p.labels.includes(l)).reduce((a,p)=>a+st(p).rev,0)]);
