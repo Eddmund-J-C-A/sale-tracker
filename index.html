@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sales Tracker</title>
+<style>
+:root{--bg:#faf8f5;--card:#fff;--tx:#2a2622;--mu:#7a726a;--ac:#8a5a3c;--ac2:#f1e6dc;--bd:#e4ddd5;--rd:#b3261e}
+@media(prefers-color-scheme:dark){:root{--bg:#1c1917;--card:#26221f;--tx:#f0ebe5;--mu:#a39a90;--ac:#d4a07a;--ac2:#3a2e26;--bd:#3a3430;--rd:#f2877f}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,sans-serif}
+#app{max-width:980px;margin:0 auto;padding:16px}
+h1,h2,h3{margin:.2em 0}h1{font-size:22px}h2{font-size:18px}h3{font-size:15px;color:var(--mu);text-transform:uppercase;letter-spacing:.04em}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin:10px 0}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.sp{flex:1}
+input,select,textarea,button{font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:7px 10px}
+input,select{min-width:0}textarea{width:100%}
+button{cursor:pointer;background:var(--ac2)}button.p{background:var(--ac);color:#fff;border-color:var(--ac)}button.d{color:var(--rd)}button.l{border:0;background:none;padding:2px 6px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+.pc{cursor:pointer}.pc:hover{border-color:var(--ac)}
+.chip{display:inline-block;background:var(--ac2);color:var(--ac);border-radius:99px;padding:1px 9px;font-size:12px;margin:2px 3px 2px 0}
+.mu{color:var(--mu);font-size:13px}.st{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
+.st div{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:8px 12px}.st b{display:block;font-size:19px}
+table{width:100%;border-collapse:collapse}td,th{padding:5px 6px;border-bottom:1px solid var(--bd);text-align:left;font-size:14px}
+.msg{background:var(--ac2);border:1px solid var(--ac);border-radius:8px;padding:8px 12px;margin:8px 0}
+svg text{fill:var(--mu);font-size:11px}
+</style></head><body><div id="app"></div>
+<script>
+const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const T=new TextEncoder(),D=new TextDecoder(),sub=crypto.subtle,RSA={name:'RSA-OAEP',hash:'SHA-256'};
+const b64=b=>{let s='';const u=new Uint8Array(b);for(let i=0;i<u.length;i+=8192)s+=String.fromCharCode(...u.subarray(i,i+8192));return btoa(s)};
+const ub=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const pw=async(p,salt)=>{const m=await sub.importKey('raw',T.encode(p),'PBKDF2',false,['deriveKey']);return sub.deriveKey({name:'PBKDF2',salt,iterations:310000,hash:'SHA-256'},m,{name:'AES-GCM',length:256},false,['encrypt','decrypt'])};
+const enc=async(k,o)=>{const iv=crypto.getRandomValues(new Uint8Array(12));return{iv:b64(iv),ct:b64(await sub.encrypt({name:'AES-GCM',iv},k,T.encode(JSON.stringify(o))))}};
+const dec=async(k,e)=>JSON.parse(D.decode(await sub.decrypt({name:'AES-GCM',iv:ub(e.iv)},k,ub(e.ct))));
+const wrap=async(wk,jwk)=>b64(await sub.encrypt({name:'RSA-OAEP'},await sub.importKey('jwk',jwk,RSA,false,['encrypt']),await sub.exportKey('raw',wk)));
+const unwrap=async(w)=>sub.importKey('raw',await sub.decrypt({name:'RSA-OAEP'},S.priv,ub(w)),'AES-GCM',true,['encrypt','decrypt']);
+const today=()=>new Date().toISOString().slice(0,10),uid=()=>crypto.randomUUID().slice(0,8);
+const money=n=>new Intl.NumberFormat(undefined,{style:'currency',currency:'USD'}).format(n||0);
+let cfg={repo:'',branch:'main',token:''};try{cfg={...cfg,...JSON.parse(localStorage.getItem('st_cfg')||'{}')}}catch(e){}
+const S={user:null,priv:null,pub:null,wss:[],cur:0,open:null,q:'',lab:'',sort:'name',msg:'',busy:0};
+
+/* ---- GitHub contents API ---- */
+async function gh(path,o={}){const r=await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${path}`+(o.method?'':`?ref=${cfg.branch}`),{...o,headers:{Authorization:'Bearer '+cfg.token,Accept:'application/vnd.github+json'}});
+ if(r.status===404)return null;if(!r.ok){const e=new Error(r.status===401?'GitHub rejected the token':r.status===403?'Token lacks Contents access to this repo':'GitHub error '+r.status);e.status=r.status;throw e}return r.json()}
+const getFile=async p=>{const j=await gh(p);return j&&{sha:j.sha,text:atob(j.content.replace(/\n/g,''))}};
+const putFile=(p,text,sha,m)=>gh(p,{method:'PUT',body:JSON.stringify({message:m,content:btoa(text),branch:cfg.branch,...(sha?{sha}:{})})});
+
+/* ---- workspaces ---- */
+const W=()=>S.wss[S.cur];
+async function persist(ws){const body={owner:ws.owner,members:ws.members,...await enc(ws.key,ws.data)};
+ try{const r=await putFile(`store/ws/${ws.id}.json`,JSON.stringify(body),ws.sha,'update');ws.sha=r.content.sha}
+ catch(e){if(e.status===409||e.status===422){await loadAll();throw new Error('Someone else changed this at the same time. Latest data was reloaded — please redo your last change.')}throw e}}
+async function mkWs(name){const key=await sub.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
+ const ws={id:uid(),key,owner:S.user,members:{[S.user]:await wrap(key,S.pub)},data:{name,products:[]},sha:null};await persist(ws);S.wss.push(ws);S.cur=S.wss.length-1}
+async function loadAll(){const list=await gh('store/ws')||[];const out=[];
+ await Promise.all(list.filter(f=>f.name.endsWith('.json')).map(async f=>{try{const x=await getFile(f.path),j=JSON.parse(x.text);if(!j.members[S.user])return;
+  const key=await unwrap(j.members[S.user]);out.push({id:f.name.slice(0,-5),sha:x.sha,owner:j.owner,members:j.members,key,data:await dec(key,j)})}catch(e){}}));
+ out.sort((a,b)=>(a.owner===S.user?0:1)-(b.owner===S.user?0:1)||a.id.localeCompare(b.id));S.wss=out;S.cur=Math.min(S.cur,Math.max(0,out.length-1))}
+
+/* ---- actions ---- */
+const go=async f=>{S.msg='';S.busy=1;render();try{await f()}catch(e){S.msg=e.message||String(e)}S.busy=0;render()};
+const save=()=>persist(W());
+const P=id=>W().data.products.find(p=>p.id===id);
+const latest=p=>[...p.priceHistory].sort((a,b)=>a.d.localeCompare(b.d)).pop();
+const A={
+ auth(mode){go(async()=>{cfg={repo:$('#repo').value.trim(),branch:$('#br').value.trim()||'main',token:$('#tok').value.trim()};
+  try{localStorage.setItem('st_cfg',JSON.stringify($('#rem').checked?cfg:{repo:cfg.repo,branch:cfg.branch}))}catch(e){}
+  const u=$('#usr').value.trim().toLowerCase(),pass=$('#pas').value;if(!/^[a-z0-9_-]{3,32}$/.test(u))throw new Error('Username: 3–32 letters, numbers, - or _');if(pass.length<8)throw new Error('Passphrase needs at least 8 characters');
+  const uf=await getFile(`store/users/${u}.json`);
+  if(mode==='in'){if(!uf)throw new Error('No such account');const j=JSON.parse(uf.text);let pj;try{pj=await dec(await pw(pass,ub(j.salt)),j.priv)}catch(e){throw new Error('Wrong passphrase')}
+   S.priv=await sub.importKey('jwk',pj,RSA,false,['decrypt']);S.pub=j.pub;S.user=u;await loadAll();if(!S.wss.length)await mkWs('My products')}
+  else{if(uf)throw new Error('That username is taken');const salt=crypto.getRandomValues(new Uint8Array(16));
+   const kp=await sub.generateKey({name:'RSA-OAEP',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},true,['encrypt','decrypt']);
+   const pub=await sub.exportKey('jwk',kp.publicKey),priv=await enc(await pw(pass,salt),await sub.exportKey('jwk',kp.privateKey));
+   await putFile(`store/users/${u}.json`,JSON.stringify({salt:b64(salt),pub,priv}),null,'new user');S.priv=kp.privateKey;S.pub=pub;S.user=u;await mkWs('My products')}})},
+ out(){S.user=S.priv=null;S.wss=[];S.open=null;render()},
+ ws(i){S.cur=+i;S.open=null;render()},
+ newWs(){const n=prompt('Name for the new shared/private collection?');if(n)go(()=>mkWs(n))},
+ share(){const u=(prompt('Username to share “'+W().data.name+'” with (they must have an account):')||'').trim().toLowerCase();if(!u)return;
+  go(async()=>{const f=await getFile(`store/users/${u}.json`);if(!f)throw new Error('No account named '+u);const ws=W();ws.members[u]=await wrap(ws.key,JSON.parse(f.text).pub);await persist(ws);S.msg=u+' can now see and edit this collection.'})},
+ rename(){const n=prompt('Rename collection',W().data.name);if(n){W().data.name=n;go(save)}},
+ add(){const n=$('#n').value.trim();if(!n)return;const pr=+$('#pr').value||0;
+  W().data.products.push({id:uid(),name:n,labels:$('#lb').value.split(',').map(s=>s.trim()).filter(Boolean),cost:+$('#co').value||0,priceHistory:pr?[{d:today(),p:pr}]:[],sales:[],notes:[]});go(save)},
+ open(id){S.open=id;render();scrollTo(0,0)},back(){S.open=null;render()},
+ del(){if(confirm('Delete this product and all its history?')){const w=W().data;w.products=w.products.filter(p=>p.id!==S.open);S.open=null;go(save)}},
+ field(k){const p=P(S.open),v=$('#f_'+k).value;p[k]=k==='cost'?+v||0:v.trim()||p[k];go(save)},
+ addLabel(){const p=P(S.open),v=$('#nl').value.trim();if(v&&!p.labels.includes(v)){p.labels.push(v);go(save)}},
+ rmLabel(i){P(S.open).labels.splice(i,1);go(save)},
+ sale(){const p=P(S.open),q=+$('#sq').value,pr=+$('#sp').value;if(!(q>0)||pr<0)return;p.sales.push({id:uid(),d:$('#sd').value||today(),q,p:pr,n:$('#sn').value.trim()});go(save)},
+ rmSale(id){const p=P(S.open);p.sales=p.sales.filter(s=>s.id!==id);go(save)},
+ price(){const p=P(S.open),v=+$('#hp').value,d=$('#hd').value||today();if(!(v>=0)||$('#hp').value==='')return;p.priceHistory=p.priceHistory.filter(h=>h.d!==d);p.priceHistory.push({d,p:v});go(save)},
+ rmPrice(d){const p=P(S.open);p.priceHistory=p.priceHistory.filter(h=>h.d!==d);go(save)},
+ note(){const t=$('#nt').value.trim();if(!t)return;P(S.open).notes.push({id:uid(),d:$('#nd').value||today(),t});go(save)},
+ rmNote(id){const p=P(S.open);p.notes=p.notes.filter(n=>n.id!==id);go(save)},
+ csv(){const rows=[['Product','Labels','Date','Qty','Unit price','Total','Note']];W().data.products.forEach(p=>p.sales.forEach(s=>rows.push([p.name,p.labels.join('|'),s.d,s.q,s.p,s.q*s.p,s.n])));
+  const t=rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');dl(t,'sales.csv','text/csv')},
+ json(){dl(JSON.stringify(W().data,null,2),'backup.json','application/json')}
+};
+const dl=(t,n,m)=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([t],{type:m}));a.download=n;a.click()};
+
+/* ---- views ---- */
+const st=p=>{const u=p.sales.reduce((a,s)=>a+s.q,0),rev=p.sales.reduce((a,s)=>a+s.q*s.p,0);return{u,rev,profit:rev-u*p.cost,last:p.sales.map(s=>s.d).sort().pop()||'',cur:(latest(p)||{}).p||0}};
+const chips=l=>l.map(x=>`<span class="chip">${esc(x)}</span>`).join('');
+function authV(){return`<h1>Sales Tracker</h1><p class="mu">Your data is encrypted in your browser before it is saved to GitHub.</p>${S.msg?`<div class="msg">${esc(S.msg)}</div>`:''}
+<div class="card"><h2>GitHub storage</h2><div class="row"><input id="repo" placeholder="owner/private-repo" value="${esc(cfg.repo)}"><input id="br" placeholder="branch" size="8" value="${esc(cfg.branch)}"></div>
+<div class="row" style="margin-top:8px"><input id="tok" class="sp" type="password" placeholder="Fine-grained token (Contents: read & write)" value="${esc(cfg.token)}"></div>
+<label class="mu"><input type="checkbox" id="rem" ${cfg.token?'checked':''}> Remember token in this browser</label></div>
+<div class="card"><h2>Account</h2><div class="row"><input id="usr" placeholder="username"><input id="pas" type="password" placeholder="passphrase (8+ chars)" class="sp"></div>
+<div class="row" style="margin-top:10px"><button class="p" ${S.busy?'disabled':''} onclick="A.auth('in')">Sign in</button><button ${S.busy?'disabled':''} onclick="A.auth('up')">Create account</button>${S.busy?'<span class="mu">Working…</span>':''}</div>
+<p class="mu">Lose your passphrase and your data cannot be recovered — there is no reset.</p></div>
+<details class="card"><summary>Setup help</summary><ol class="mu"><li>Create a <b>private</b> repo (e.g. sales-data).</li><li>GitHub → Settings → Developer settings → Fine-grained tokens: select only that repo, permission <i>Contents: Read and write</i>.</li><li>To let others use the app, add them as collaborators and have each make their own token for the same repo.</li><li>Each person creates an account here; use ⤴ Share to give someone access to a collection.</li></ol></details>`}
+function mainV(){const w=W(),pr=w.data.products;
+ const head=`<div class="row"><h1>${esc(w.data.name)}</h1><button class="l" onclick="A.rename()">✎</button><span class="sp"></span><span class="mu">${esc(S.user)}</span><button onclick="A.out()">Sign out</button></div>
+ ${S.msg?`<div class="msg">${esc(S.msg)}</div>`:''}${S.busy?'<div class="mu">Saving…</div>':''}
+ <div class="row"><select onchange="A.ws(this.value)">${S.wss.map((x,i)=>`<option value="${i}" ${i==S.cur?'selected':''}>${esc(x.data.name)}${x.owner!==S.user?' (from '+esc(x.owner)+')':''}</option>`).join('')}</select>
+ <button onclick="A.newWs()">+ Collection</button><button onclick="A.share()">⤴ Share</button><span class="mu">Members: ${Object.keys(w.members).map(esc).join(', ')}</span></div>`;
+ return head+(S.open&&P(S.open)?detailV(P(S.open)):listV(w,pr))}
+function listV(w,pr){const all=[...new Set(pr.flatMap(p=>p.labels))].sort(),tot=pr.map(st);
+ const rev=tot.reduce((a,t)=>a+t.rev,0),prof=tot.reduce((a,t)=>a+t.profit,0),un=tot.reduce((a,t)=>a+t.u,0);
+ const byL=all.map(l=>[l,pr.filter(p=>p.labels.includes(l)).reduce((a,p)=>a+st(p).rev,0)]);
+ let v=pr.filter(p=>(!S.lab||p.labels.includes(S.lab))&&p.name.toLowerCase().includes(S.q.toLowerCase()));
+ v.sort((a,b)=>S.sort==='rev'?st(b).rev-st(a).rev:S.sort==='recent'?st(b).last.localeCompare(st(a).last):a.name.localeCompare(b.name));
+ return`<div class="st" style="margin-top:10px"><div><span class="mu">Products</span><b>${pr.length}</b></div><div><span class="mu">Units sold</span><b>${un}</b></div><div><span class="mu">Revenue</span><b>${money(rev)}</b></div><div><span class="mu">Profit (with costs)</span><b>${money(prof)}</b></div></div>
+ ${byL.length?`<div class="mu" style="margin-top:6px">Revenue by label: ${byL.map(([l,r])=>`<span class="chip">${esc(l)} ${money(r)}</span>`).join('')}</div>`:''}
+ <details class="card"><summary><b>+ Add product</b></summary><div class="row" style="margin-top:8px"><input id="n" placeholder="Name" class="sp"><input id="lb" placeholder="Labels, comma separated" class="sp" list="al"><input id="pr" type="number" step="0.01" placeholder="Price" size="7"><input id="co" type="number" step="0.01" placeholder="Cost" size="7"><button class="p" onclick="A.add()">Add</button></div><datalist id="al">${all.map(l=>`<option value="${esc(l)}">`).join('')}</datalist></details>
+ <div class="row"><input class="sp" placeholder="Search…" value="${esc(S.q)}" oninput="S.q=this.value;clearTimeout(window._t);window._t=setTimeout(()=>{render();const i=$('#sq0');i.focus();i.setSelectionRange(99,99)},250)" id="sq0">
+ <select onchange="S.lab=this.value;render()"><option value="">All labels</option>${all.map(l=>`<option ${l===S.lab?'selected':''}>${esc(l)}</option>`).join('')}</select>
+ <select onchange="S.sort=this.value;render()"><option value="name">A–Z</option><option value="rev" ${S.sort==='rev'?'selected':''}>Top revenue</option><option value="recent" ${S.sort==='recent'?'selected':''}>Recently sold</option></select>
+ <button onclick="A.csv()">Export sales CSV</button><button onclick="A.json()">Backup</button></div>
+ <div class="grid">${v.map(p=>{const s=st(p);return`<div class="card pc" onclick="A.open('${p.id}')"><b>${esc(p.name)}</b><div>${chips(p.labels)}</div><div>${money(s.cur)} · ${s.u} sold · ${money(s.rev)}</div><div class="mu">${s.last?'Last sold '+s.last:'Not sold yet'}</div></div>`}).join('')||'<p class="mu">No products yet.</p>'}</div>`}
+function chart(p){const h=[...p.priceHistory].sort((a,b)=>a.d.localeCompare(b.d)),pts=[...h.map(x=>({d:x.d,p:x.p,t:0})),...p.sales.map(x=>({d:x.d,p:x.p,t:1}))];
+ if(!pts.length)return'<p class="mu">No prices yet.</p>';const ts=pts.map(x=>+new Date(x.d)),mn=Math.min(...ts),mx=Math.max(...ts)||1,pv=pts.map(x=>x.p),lo=Math.min(...pv),hi=Math.max(...pv);
+ const X=d=>40+(mx===mn?260:(+new Date(d)-mn)/(mx-mn)*520),Y=v=>hi===lo?70:130-(v-lo)/(hi-lo)*110;
+ let path='';h.forEach((x,i)=>{path+=(i?`H${X(x.d)}V${Y(x.p)}`:`M${X(x.d)} ${Y(x.p)}`)});if(h.length)path+=`H570`;
+ return`<svg viewBox="0 0 600 160" width="100%"><path d="${path}" fill="none" stroke="var(--ac)" stroke-width="2"/>${pts.filter(x=>x.t).map(x=>`<circle cx="${X(x.d)}" cy="${Y(x.p)}" r="3.5" fill="var(--rd)"><title>Sold ${x.d}: ${money(x.p)}</title></circle>`).join('')}<text x="2" y="${Y(hi)+4}">${money(hi)}</text><text x="2" y="${Y(lo)+4}">${money(lo)}</text><text x="40" y="154">${[...h.map(x=>x.d),...p.sales.map(x=>x.d)].sort()[0]}</text><text x="520" y="154">${[...h.map(x=>x.d),...p.sales.map(x=>x.d)].sort().pop()}</text></svg><div class="mu">Line = list price · dots = actual sale prices</div>`}
+function detailV(p){const s=st(p),all=[...new Set(W().data.products.flatMap(x=>x.labels))];
+ return`<div class="row" style="margin-top:10px"><button onclick="A.back()">← Back</button><span class="sp"></span><button class="d" onclick="A.del()">Delete product</button></div>
+ <div class="card"><div class="row"><input id="f_name" class="sp" value="${esc(p.name)}" onchange="A.field('name')"><label class="mu">Cost <input id="f_cost" type="number" step="0.01" size="6" style="width:90px" value="${p.cost}" onchange="A.field('cost')"></label></div>
+ <div style="margin-top:8px">${p.labels.map((l,i)=>`<span class="chip">${esc(l)} <a href="#" onclick="A.rmLabel(${i});return false" style="color:inherit">×</a></span>`).join('')}
+ <input id="nl" list="al2" placeholder="Add label" size="12" onkeydown="if(event.key==='Enter')A.addLabel()"><datalist id="al2">${all.map(l=>`<option value="${esc(l)}">`).join('')}</datalist><button onclick="A.addLabel()">Add</button></div></div>
+ <div class="st"><div><span class="mu">Current price</span><b>${money(s.cur)}</b></div><div><span class="mu">Units sold</span><b>${s.u}</b></div><div><span class="mu">Revenue</span><b>${money(s.rev)}</b></div><div><span class="mu">Profit</span><b>${money(s.profit)}</b></div></div>
+ <div class="card"><h3>Sales</h3><div class="row"><input id="sd" type="date" value="${today()}"><input id="sq" type="number" min="1" placeholder="Qty" value="1" style="width:70px"><input id="sp" type="number" step="0.01" placeholder="Unit price" value="${s.cur||''}" style="width:100px"><input id="sn" class="sp" placeholder="Note (buyer, market…)"><button class="p" onclick="A.sale()">Log sale</button></div>
+ <table>${[...p.sales].sort((a,b)=>b.d.localeCompare(a.d)).map(x=>`<tr><td>${x.d}</td><td>${x.q} × ${money(x.p)}</td><td>${money(x.q*x.p)}</td><td class="mu">${esc(x.n)}</td><td><button class="l d" onclick="A.rmSale('${x.id}')">✕</button></td></tr>`).join('')}</table></div>
+ <div class="card"><h3>Price history</h3>${chart(p)}<div class="row"><input id="hd" type="date" value="${today()}"><input id="hp" type="number" step="0.01" placeholder="New price"><button class="p" onclick="A.price()">Set price</button></div>
+ <table>${[...p.priceHistory].sort((a,b)=>b.d.localeCompare(a.d)).map(h=>`<tr><td>${h.d}</td><td>${money(h.p)}</td><td><button class="l d" onclick="A.rmPrice('${h.d}')">✕</button></td></tr>`).join('')}</table></div>
+ <div class="card"><h3>Notes</h3><div class="row"><input id="nd" type="date" value="${today()}"><input id="nt" class="sp" placeholder="e.g. changed scent, customer feedback…" onkeydown="if(event.key==='Enter')A.note()"><button class="p" onclick="A.note()">Add note</button></div>
+ <table>${[...p.notes].sort((a,b)=>b.d.localeCompare(a.d)).map(n=>`<tr><td style="white-space:nowrap">${n.d}</td><td>${esc(n.t)}</td><td><button class="l d" onclick="A.rmNote('${n.id}')">✕</button></td></tr>`).join('')}</table></div>`}
+function render(){const a=document.activeElement;if(a&&a.id==='sq0'&&S.user)return;$('#app').innerHTML=S.user?mainV():authV()}
+render();
+</script></body></html>
