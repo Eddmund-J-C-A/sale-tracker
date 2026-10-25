@@ -37,17 +37,18 @@ let cfg={repo:'',branch:'main',token:''};try{cfg={...cfg,...JSON.parse(localStor
 const S={user:null,priv:null,pub:null,wss:[],cur:0,open:null,q:'',lab:'',sort:'name',msg:'',busy:0};
 
 /* ---- GitHub contents API ---- */
-async function gh(path,o={}){const r=await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${path}`+(o.method?'':`?ref=${cfg.branch}`),{...o,cache:'no-store',headers:{Authorization:'Bearer '+cfg.token,Accept:'application/vnd.github+json'}});
+const NETERR=e=>new Error('Could not reach GitHub ('+e.message+'). Open this file directly in your browser (download it, then double-click it, or host it on GitHub Pages) — previews inside chat apps block network access.');
+async function gh(path,o={}){const r=await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${path}`+(o.method?'':`?ref=${cfg.branch}`),{...o,cache:'no-store',headers:{Authorization:'Bearer '+cfg.token,Accept:'application/vnd.github+json'}}).catch(e=>{throw NETERR(e)});
  if(r.status===404){if(o.method)throw Object.assign(new Error('GitHub returned 404 — check the repo name, branch, and that the token has Contents read/write on this repo'),{status:404});return null}if(!r.ok){const e=new Error(r.status===401?'GitHub rejected the token':r.status===403?'Token lacks Contents access to this repo':'GitHub error '+r.status);e.status=r.status;throw e}return r.json()}
 const getFile=async p=>{const j=await gh(p);return j&&{sha:j.sha,text:atob(j.content.replace(/\n/g,''))}};
 const putFile=(p,text,sha,m)=>gh(p,{method:'PUT',body:JSON.stringify({message:m,content:btoa(text),branch:cfg.branch,...(sha?{sha}:{})})});
 
 async function chk(){const h={Authorization:'Bearer '+cfg.token,Accept:'application/vnd.github+json'};
  if(!/^[\w.-]+\/[\w.-]+$/.test(cfg.repo))throw new Error('Repo must look like owner/repo-name');if(!cfg.token)throw new Error('Paste your fine-grained token');
- let r=await fetch('https://api.github.com/repos/'+cfg.repo,{headers:h,cache:'no-store'});
+ let r=await fetch('https://api.github.com/repos/'+cfg.repo,{headers:h,cache:'no-store'}).catch(e=>{throw NETERR(e)});
  if(r.status===401)throw new Error('GitHub rejected the token (expired or mistyped)');
  if(!r.ok)throw new Error('Repo not found, or the token has no access to it. Check owner/repo and the token’s repository selection.');
- r=await fetch('https://api.github.com/repos/'+cfg.repo+'/branches/'+encodeURIComponent(cfg.branch),{headers:h,cache:'no-store'});
+ r=await fetch('https://api.github.com/repos/'+cfg.repo+'/branches/'+encodeURIComponent(cfg.branch),{headers:h,cache:'no-store'}).catch(e=>{throw NETERR(e)});
  if(!r.ok)throw new Error('Branch “'+cfg.branch+'” not found. If the repo is empty, add a README on GitHub first.')}
 /* ---- workspaces ---- */
 const W=()=>S.wss[S.cur];
@@ -106,7 +107,8 @@ const dl=(t,n,m)=>{const a=document.createElement('a');a.href=URL.createObjectUR
 /* ---- views ---- */
 const st=p=>{const u=p.sales.reduce((a,s)=>a+s.q,0),rev=p.sales.reduce((a,s)=>a+s.q*s.p,0);return{u,rev,profit:rev-u*p.cost,last:p.sales.map(s=>s.d).sort().pop()||'',cur:(latest(p)||{}).p||0}};
 const chips=l=>l.map(x=>`<span class="chip">${esc(x)}</span>`).join('');
-function authV(){return`<h1>Sales Tracker</h1><p class="mu">Your data is encrypted in your browser before it is saved to GitHub.</p>${S.msg?`<div class="msg">${esc(S.msg)}</div>`:''}
+const env=()=>{const m=[];if(!window.crypto||!crypto.subtle)m.push('Encryption is unavailable here — open this page over https:// or as a local file.');if(window.top!==window)m.push('This page is inside a preview frame, which usually blocks GitHub access. Download the file and open it in its own browser tab.');return m.map(x=>`<div class="msg">${x}</div>`).join('')};
+function authV(){return`<h1>Sales Tracker</h1><p class="mu">Your data is encrypted in your browser before it is saved to GitHub.</p>${env()}${S.msg?`<div class="msg">${esc(S.msg)}</div>`:''}
 <div class="card"><h2>GitHub storage</h2><div class="row"><input id="repo" placeholder="owner/private-repo" value="${esc(cfg.repo)}"><input id="br" placeholder="branch" size="8" value="${esc(cfg.branch)}"></div>
 <div class="row" style="margin-top:8px"><input id="tok" class="sp" type="password" placeholder="Fine-grained token (Contents: read & write)" value="${esc(cfg.token)}"></div>
 <label class="mu"><input type="checkbox" id="rem" ${cfg.token?'checked':''}> Remember token in this browser</label></div>
@@ -151,5 +153,6 @@ function detailV(p){const s=st(p),all=[...new Set(W().data.products.flatMap(x=>x
  <div class="card"><h3>Notes</h3><div class="row"><input id="nd" type="date" value="${today()}"><input id="nt" class="sp" placeholder="e.g. changed scent, customer feedback…" onkeydown="if(event.key==='Enter')A.note()"><button class="p" onclick="A.note()">Add note</button></div>
  <table>${[...p.notes].sort((a,b)=>b.d.localeCompare(a.d)).map(n=>`<tr><td style="white-space:nowrap">${n.d}</td><td>${esc(n.t)}</td><td><button class="l d" onclick="A.rmNote('${n.id}')">✕</button></td></tr>`).join('')}</table></div>`}
 function render(){const f=document.activeElement&&document.activeElement.id==='sq0'&&S.user;$('#app').innerHTML=S.user?mainV():authV();if(f){const i=$('#sq0');i.focus();i.setSelectionRange(99,99)}}
+window.addEventListener&&window.addEventListener('error',e=>{S.msg='Error: '+e.message;S.busy=0;render()});
 render();
 </script></body></html>
