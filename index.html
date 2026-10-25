@@ -184,7 +184,7 @@ function detailV(p){const s=st(p),all=[...new Set(W().data.products.flatMap(x=>x
  <table>${[...p.priceHistory].sort((a,b)=>b.d.localeCompare(a.d)).map(h=>`<tr><td>${h.d}</td><td>${money(h.p)}</td><td><button class="l d" onclick="A.rmPrice('${h.d}')">✕</button></td></tr>`).join('')}</table></div>
  <div class="card"><h3>Notes</h3><div class="row"><input id="nd" type="date" value="${today()}"><input id="nt" class="sp" placeholder="e.g. changed scent, customer feedback…" onkeydown="if(event.key==='Enter')A.note()"><button class="p" onclick="A.note()">Add note</button></div>
  <table>${[...p.notes].sort((a,b)=>b.d.localeCompare(a.d)).map(n=>`<tr><td style="white-space:nowrap">${n.d}</td><td>${esc(n.t)}</td><td><button class="l d" onclick="A.rmNote('${n.id}')">✕</button></td></tr>`).join('')}</table></div>`}
-function render(){const f=document.activeElement&&document.activeElement.id==='sq0'&&S.user;$('#app').innerHTML=S.user?mainV():authV();if(f){const i=$('#sq0');i.focus();i.setSelectionRange(99,99)}}
+function render(){const f=document.activeElement&&document.activeElement.id==='sq0'&&S.user;$('#app').innerHTML=(S.user?mainV():authV())+'<p class="mu" style="text-align:center;margin:24px 0">Version: Sale Time build · 25 Oct 2026</p>';if(f){const i=$('#sq0');i.focus();i.setSelectionRange(99,99)}}
 window.addEventListener&&window.addEventListener('error',e=>{S.msg='Error: '+e.message;S.busy=0;render()});
 render();
 </script></body></html>
