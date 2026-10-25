@@ -37,11 +37,18 @@ let cfg={repo:'',branch:'main',token:''};try{cfg={...cfg,...JSON.parse(localStor
 const S={user:null,priv:null,pub:null,wss:[],cur:0,open:null,q:'',lab:'',sort:'name',msg:'',busy:0};
 
 /* ---- GitHub contents API ---- */
-async function gh(path,o={}){const r=await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${path}`+(o.method?'':`?ref=${cfg.branch}`),{...o,headers:{Authorization:'Bearer '+cfg.token,Accept:'application/vnd.github+json'}});
- if(r.status===404)return null;if(!r.ok){const e=new Error(r.status===401?'GitHub rejected the token':r.status===403?'Token lacks Contents access to this repo':'GitHub error '+r.status);e.status=r.status;throw e}return r.json()}
+async function gh(path,o={}){const r=await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${path}`+(o.method?'':`?ref=${cfg.branch}`),{...o,cache:'no-store',headers:{Authorization:'Bearer '+cfg.token,Accept:'application/vnd.github+json'}});
+ if(r.status===404){if(o.method)throw Object.assign(new Error('GitHub returned 404 — check the repo name, branch, and that the token has Contents read/write on this repo'),{status:404});return null}if(!r.ok){const e=new Error(r.status===401?'GitHub rejected the token':r.status===403?'Token lacks Contents access to this repo':'GitHub error '+r.status);e.status=r.status;throw e}return r.json()}
 const getFile=async p=>{const j=await gh(p);return j&&{sha:j.sha,text:atob(j.content.replace(/\n/g,''))}};
 const putFile=(p,text,sha,m)=>gh(p,{method:'PUT',body:JSON.stringify({message:m,content:btoa(text),branch:cfg.branch,...(sha?{sha}:{})})});
 
+async function chk(){const h={Authorization:'Bearer '+cfg.token,Accept:'application/vnd.github+json'};
+ if(!/^[\w.-]+\/[\w.-]+$/.test(cfg.repo))throw new Error('Repo must look like owner/repo-name');if(!cfg.token)throw new Error('Paste your fine-grained token');
+ let r=await fetch('https://api.github.com/repos/'+cfg.repo,{headers:h,cache:'no-store'});
+ if(r.status===401)throw new Error('GitHub rejected the token (expired or mistyped)');
+ if(!r.ok)throw new Error('Repo not found, or the token has no access to it. Check owner/repo and the token’s repository selection.');
+ r=await fetch('https://api.github.com/repos/'+cfg.repo+'/branches/'+encodeURIComponent(cfg.branch),{headers:h,cache:'no-store'});
+ if(!r.ok)throw new Error('Branch “'+cfg.branch+'” not found. If the repo is empty, add a README on GitHub first.')}
 /* ---- workspaces ---- */
 const W=()=>S.wss[S.cur];
 async function persist(ws){const body={owner:ws.owner,members:ws.members,...await enc(ws.key,ws.data)};
@@ -60,9 +67,10 @@ const save=()=>persist(W());
 const P=id=>W().data.products.find(p=>p.id===id);
 const latest=p=>[...p.priceHistory].sort((a,b)=>a.d.localeCompare(b.d)).pop();
 const A={
- auth(mode){go(async()=>{cfg={repo:$('#repo').value.trim(),branch:$('#br').value.trim()||'main',token:$('#tok').value.trim()};
-  try{localStorage.setItem('st_cfg',JSON.stringify($('#rem').checked?cfg:{repo:cfg.repo,branch:cfg.branch}))}catch(e){}
-  const u=$('#usr').value.trim().toLowerCase(),pass=$('#pas').value;if(!/^[a-z0-9_-]{3,32}$/.test(u))throw new Error('Username: 3–32 letters, numbers, - or _');if(pass.length<8)throw new Error('Passphrase needs at least 8 characters');
+ auth(mode){cfg={repo:$('#repo').value.trim(),branch:$('#br').value.trim()||'main',token:$('#tok').value.trim()};
+  const u=$('#usr').value.trim().toLowerCase(),pass=$('#pas').value,rem=$('#rem').checked;S.u0=u;
+  try{localStorage.setItem('st_cfg',JSON.stringify(rem?cfg:{repo:cfg.repo,branch:cfg.branch}))}catch(e){}
+  go(async()=>{await chk();if(!/^[a-z0-9_-]{3,32}$/.test(u))throw new Error('Username: 3–32 letters, numbers, - or _');if(pass.length<8)throw new Error('Passphrase needs at least 8 characters');
   const uf=await getFile(`store/users/${u}.json`);
   if(mode==='in'){if(!uf)throw new Error('No such account');const j=JSON.parse(uf.text);let pj;try{pj=await dec(await pw(pass,ub(j.salt)),j.priv)}catch(e){throw new Error('Wrong passphrase')}
    S.priv=await sub.importKey('jwk',pj,RSA,false,['decrypt']);S.pub=j.pub;S.user=u;await loadAll();if(!S.wss.length)await mkWs('My products')}
@@ -102,7 +110,7 @@ function authV(){return`<h1>Sales Tracker</h1><p class="mu">Your data is encrypt
 <div class="card"><h2>GitHub storage</h2><div class="row"><input id="repo" placeholder="owner/private-repo" value="${esc(cfg.repo)}"><input id="br" placeholder="branch" size="8" value="${esc(cfg.branch)}"></div>
 <div class="row" style="margin-top:8px"><input id="tok" class="sp" type="password" placeholder="Fine-grained token (Contents: read & write)" value="${esc(cfg.token)}"></div>
 <label class="mu"><input type="checkbox" id="rem" ${cfg.token?'checked':''}> Remember token in this browser</label></div>
-<div class="card"><h2>Account</h2><div class="row"><input id="usr" placeholder="username"><input id="pas" type="password" placeholder="passphrase (8+ chars)" class="sp"></div>
+<div class="card"><h2>Account</h2><div class="row"><input id="usr" placeholder="username" value="${esc(S.u0||'')}"><input id="pas" type="password" placeholder="passphrase (8+ chars)" class="sp" onkeydown="if(event.key==='Enter')A.auth('in')"></div>
 <div class="row" style="margin-top:10px"><button class="p" ${S.busy?'disabled':''} onclick="A.auth('in')">Sign in</button><button ${S.busy?'disabled':''} onclick="A.auth('up')">Create account</button>${S.busy?'<span class="mu">Working…</span>':''}</div>
 <p class="mu">Lose your passphrase and your data cannot be recovered — there is no reset.</p></div>
 <details class="card"><summary>Setup help</summary><ol class="mu"><li>Create a <b>private</b> repo (e.g. sales-data).</li><li>GitHub → Settings → Developer settings → Fine-grained tokens: select only that repo, permission <i>Contents: Read and write</i>.</li><li>To let others use the app, add them as collaborators and have each make their own token for the same repo.</li><li>Each person creates an account here; use ⤴ Share to give someone access to a collection.</li></ol></details>`}
@@ -120,7 +128,7 @@ function listV(w,pr){const all=[...new Set(pr.flatMap(p=>p.labels))].sort(),tot=
  return`<div class="st" style="margin-top:10px"><div><span class="mu">Products</span><b>${pr.length}</b></div><div><span class="mu">Units sold</span><b>${un}</b></div><div><span class="mu">Revenue</span><b>${money(rev)}</b></div><div><span class="mu">Profit (with costs)</span><b>${money(prof)}</b></div></div>
  ${byL.length?`<div class="mu" style="margin-top:6px">Revenue by label: ${byL.map(([l,r])=>`<span class="chip">${esc(l)} ${money(r)}</span>`).join('')}</div>`:''}
  <details class="card"><summary><b>+ Add product</b></summary><div class="row" style="margin-top:8px"><input id="n" placeholder="Name" class="sp"><input id="lb" placeholder="Labels, comma separated" class="sp" list="al"><input id="pr" type="number" step="0.01" placeholder="Price" size="7"><input id="co" type="number" step="0.01" placeholder="Cost" size="7"><button class="p" onclick="A.add()">Add</button></div><datalist id="al">${all.map(l=>`<option value="${esc(l)}">`).join('')}</datalist></details>
- <div class="row"><input class="sp" placeholder="Search…" value="${esc(S.q)}" oninput="S.q=this.value;clearTimeout(window._t);window._t=setTimeout(()=>{render();const i=$('#sq0');i.focus();i.setSelectionRange(99,99)},250)" id="sq0">
+ <div class="row"><input class="sp" placeholder="Search…" value="${esc(S.q)}" oninput="S.q=this.value;clearTimeout(window._t);window._t=setTimeout(render,250)" id="sq0">
  <select onchange="S.lab=this.value;render()"><option value="">All labels</option>${all.map(l=>`<option ${l===S.lab?'selected':''}>${esc(l)}</option>`).join('')}</select>
  <select onchange="S.sort=this.value;render()"><option value="name">A–Z</option><option value="rev" ${S.sort==='rev'?'selected':''}>Top revenue</option><option value="recent" ${S.sort==='recent'?'selected':''}>Recently sold</option></select>
  <button onclick="A.csv()">Export sales CSV</button><button onclick="A.json()">Backup</button></div>
@@ -142,6 +150,6 @@ function detailV(p){const s=st(p),all=[...new Set(W().data.products.flatMap(x=>x
  <table>${[...p.priceHistory].sort((a,b)=>b.d.localeCompare(a.d)).map(h=>`<tr><td>${h.d}</td><td>${money(h.p)}</td><td><button class="l d" onclick="A.rmPrice('${h.d}')">✕</button></td></tr>`).join('')}</table></div>
  <div class="card"><h3>Notes</h3><div class="row"><input id="nd" type="date" value="${today()}"><input id="nt" class="sp" placeholder="e.g. changed scent, customer feedback…" onkeydown="if(event.key==='Enter')A.note()"><button class="p" onclick="A.note()">Add note</button></div>
  <table>${[...p.notes].sort((a,b)=>b.d.localeCompare(a.d)).map(n=>`<tr><td style="white-space:nowrap">${n.d}</td><td>${esc(n.t)}</td><td><button class="l d" onclick="A.rmNote('${n.id}')">✕</button></td></tr>`).join('')}</table></div>`}
-function render(){const a=document.activeElement;if(a&&a.id==='sq0'&&S.user)return;$('#app').innerHTML=S.user?mainV():authV()}
+function render(){const f=document.activeElement&&document.activeElement.id==='sq0'&&S.user;$('#app').innerHTML=S.user?mainV():authV();if(f){const i=$('#sq0');i.focus();i.setSelectionRange(99,99)}}
 render();
 </script></body></html>
